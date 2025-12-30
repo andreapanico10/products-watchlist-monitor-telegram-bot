@@ -57,29 +57,46 @@ Per utilizzare il bot, devi avere un account Amazon Associates con accesso a Pro
 
 ### 3.2: Richiedere Accesso a PA-API
 
+**⚠️ IMPORTANTE - Requisiti per PA-API:**
+
+Amazon richiede i seguenti requisiti per accedere a Product Advertising API:
+
+1. ✅ **Account di affiliazione approvato** - Il tuo account Amazon Associates deve essere attivo e approvato
+2. ✅ **Conformità all'accordo operativo** - Devi rispettare i termini del programma di affiliazione
+3. ✅ **10 vendite qualificate negli ultimi 30 giorni** - **Questo è il requisito più importante!**
+
+**Se non hai ancora 10 vendite qualificate:**
+- Non puoi accedere a PA-API finché non raggiungi questo obiettivo
+- Devi generare almeno 10 vendite qualificate attraverso i tuoi link affiliate
+- Una volta raggiunte le 10 vendite, l'accesso a PA-API diventerà disponibile automaticamente
+
+**Come procedere:**
+
 1. **Accedi a Amazon Associates Central**:
    - Vai su https://affiliate-program.amazon.it/home (o il sito del tuo paese)
    - Accedi con le tue credenziali
 
-2. **Vai alla sezione Tools**:
-   - Nel menu principale, cerca "Tools" o "Strumenti"
+2. **Genera vendite qualificate**:
+   - Usa SiteStripe o crea link affiliate manualmente
+   - Condividi i link su siti web, social media, blog, ecc.
+   - Attendi di raggiungere 10 vendite qualificate negli ultimi 30 giorni
+
+3. **Una volta raggiunte le 10 vendite**:
+   - Vai alla sezione "Tools" o "Strumenti" nel menu
    - Seleziona "Product Advertising API" o "PA-API"
+   - L'accesso dovrebbe essere automaticamente disponibile
+   - Clicca su "Create Credentials" o "Crea Credenziali" per ottenere le chiavi API
 
-3. **Richiedi l'accesso**:
-   - Clicca su "Request Access" o "Richiedi Accesso"
-   - Compila il modulo di richiesta:
-     - **Use Case**: Seleziona "Price Monitoring" o descrivi l'uso del bot
-     - **Website/App URL**: Inserisci l'URL del tuo sito o del bot
-     - **Description**: Spiega che userai l'API per monitorare prezzi e generare link affiliate
-   - Invia la richiesta
-
-4. **Attendi l'approvazione**:
-   - Amazon può richiedere 24-48 ore per approvare la richiesta
-   - Riceverai un'email di conferma quando l'accesso sarà approvato
+**Alternativa: SiteStripe**
+- Amazon suggerisce di usare SiteStripe come alternativa temporanea
+- SiteStripe permette di creare link affiliate manualmente, ma non è adatto per automazione
+- Non può essere usato per il bot (richiede interazione manuale)
 
 ### 3.3: Ottenere le Credenziali PA-API
 
-Una volta approvato l'accesso:
+**⚠️ Solo dopo aver raggiunto 10 vendite qualificate negli ultimi 30 giorni:**
+
+Una volta che hai raggiunto i requisiti e l'accesso è disponibile:
 
 1. **Vai alla sezione Credentials**:
    - In Amazon Associates Central, vai su "Tools" > "Product Advertising API"
@@ -113,17 +130,23 @@ Il codice affiliate (tag) è lo stesso dell'Associate Tag, ma puoi anche:
 
 ### 3.5: Limitazioni e Note
 
+- **Requisiti per PA-API**:
+  - ⚠️ **10 vendite qualificate negli ultimi 30 giorni** (requisito obbligatorio)
+  - Account di affiliazione approvato e attivo
+  - Conformità all'accordo operativo del programma
+  
 - **Rate Limiting**: 
   - Account gratuito: 1 richiesta/secondo
-  - Account a pagamento: fino a 10 richieste/secondo
+  - Il rate limiting aumenta automaticamente in base alle performance (vendite generate)
   
 - **Regioni supportate**:
   - IT (Italia), US, UK, DE, FR, ES, CA, JP, AU
   - Assicurati di usare la regione corretta nel file `.env`
 
-- **Requisiti**:
+- **Mantenimento account**:
   - Devi avere almeno 3 vendite qualificate nei primi 180 giorni per mantenere l'account attivo
-  - L'accesso a PA-API può essere revocato se non rispetti i termini di servizio
+  - L'accesso a PA-API può essere revocato se non mantieni i requisiti o non rispetti i termini di servizio
+  - Se le vendite scendono sotto le 10 negli ultimi 30 giorni, l'accesso a PA-API può essere sospeso
 
 ## Passo 4: Configurare le Variabili d'Ambiente
 

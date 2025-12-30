@@ -4,7 +4,8 @@ alembic==1.13.1
 psycopg2-binary==2.9.9
 python-dotenv==1.0.0
 apscheduler==3.10.4
-requests==2.31.0
+nest-asyncio==1.6.0
+requests>=2.32.2
 beautifulsoup4==4.12.2
 lxml==4.9.3
 

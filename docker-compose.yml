@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:14-alpine
+    container_name: amazon_bot_postgres
+    environment:
+      POSTGRES_DB: amazon_affiliate_bot
+      POSTGRES_USER: andrea
+      POSTGRES_PASSWORD: botpassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U andrea -d amazon_affiliate_bot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  bot:
+    build: .
+    container_name: amazon_bot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Telegram Bot
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      
+      # Database (uses Docker service name)
+      DATABASE_URL: postgresql://andrea:botpassword@postgres:5432/amazon_affiliate_bot
+      
+      # Amazon PA-API (optional)
+      ENABLE_PA_API: ${ENABLE_PA_API:-false}
+      AMAZON_ACCESS_KEY: ${AMAZON_ACCESS_KEY:-}
+      AMAZON_SECRET_KEY: ${AMAZON_SECRET_KEY:-}
+      AMAZON_ASSOCIATE_TAG: ${AMAZON_ASSOCIATE_TAG:-}
+      AMAZON_REGION: ${AMAZON_REGION:-IT}
+      
+      # Affiliate
+      AMAZON_AFFILIATE_TAG: ${AMAZON_AFFILIATE_TAG:-}
+      
+      # Scheduler
+      PRICE_CHECK_INTERVAL_HOURS: ${PRICE_CHECK_INTERVAL_HOURS:-6}
+      DAILY_SUMMARY_HOUR: ${DAILY_SUMMARY_HOUR:-9}
+      DAILY_SUMMARY_MINUTE: ${DAILY_SUMMARY_MINUTE:-0}
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
