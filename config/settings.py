@@ -10,6 +10,9 @@ class Settings:
     
     # Telegram Bot
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHANNEL_ID: str = os.getenv("TELEGRAM_CHANNEL_ID", "")
+    CHANNEL_DEAL_THRESHOLD: int = int(os.getenv("CHANNEL_DEAL_THRESHOLD", "20"))  # Percentage drop
+
     
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/amazon_affiliate_bot")

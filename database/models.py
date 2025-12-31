@@ -1,5 +1,5 @@
 """SQLAlchemy models for the database."""
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, BigInteger, String, Float, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database.database import Base
@@ -9,7 +9,7 @@ class User(Base):
     """User model for Telegram users."""
     __tablename__ = "users"
     
-    telegram_id = Column(Integer, primary_key=True, index=True)
+    telegram_id = Column(BigInteger, primary_key=True, index=True)
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     last_name = Column(String, nullable=True)
@@ -19,8 +19,15 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
+    # Referral system fields
+    referrer_id = Column(BigInteger, ForeignKey("users.telegram_id"), nullable=True, index=True)
+    is_vip = Column(Boolean, default=False, nullable=False)
+    referral_count = Column(Integer, default=0, nullable=False)
+    product_limit = Column(Integer, default=3, nullable=False)
+    
     # Relationships
     user_products = relationship("UserProduct", back_populates="user", cascade="all, delete-orphan")
+    referrer = relationship("User", remote_side=[telegram_id], foreign_keys=[referrer_id])
 
 
 class Product(Base):
@@ -46,7 +53,7 @@ class UserProduct(Base):
     __tablename__ = "user_products"
     
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.telegram_id"), nullable=False)
+    user_id = Column(BigInteger, ForeignKey("users.telegram_id"), nullable=False)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     added_at = Column(DateTime(timezone=True), server_default=func.now())
     

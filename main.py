@@ -7,7 +7,7 @@ from telegram import Bot
 from telegram.ext import Application
 from config.settings import settings
 from bot.handlers import register_handlers
-from scheduler.price_checker import check_prices_job, daily_summary_job
+from scheduler.price_checker import check_prices_job_vip, check_prices_job_regular, daily_summary_job
 
 # Allow nested event loops (needed for APScheduler + python-telegram-bot)
 nest_asyncio.apply()
@@ -17,6 +17,12 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+
+# Suppress noisy HTTP loggers
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('telegram').setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
@@ -59,6 +65,8 @@ async def main():
             BotCommand("start", "Avvia il bot e vedi le istruzioni"),
             BotCommand("watchlist", "Visualizza i tuoi prodotti monitorati"),
             BotCommand("remove", "Rimuovi un prodotto dalla watchlist (usa: /remove ASIN)"),
+            BotCommand("referral", "Vedi le tue statistiche referral e il tuo link"),
+            BotCommand("canale", "Informazioni sul canale Telegram ufficiale"),
         ]
         await bot.set_my_commands(commands)
         logger.info("Bot commands registered successfully")
@@ -66,33 +74,47 @@ async def main():
         logger.warning(f"Failed to register bot commands: {e}")
     
     # Setup scheduler - will use the current event loop
-    scheduler = AsyncIOScheduler()
+    # Configure to allow concurrent execution and handle missed jobs
+    scheduler = AsyncIOScheduler(
+        job_defaults={
+            'coalesce': True,  # Combine multiple pending executions into one
+            'max_instances': 3,  # Allow up to 3 concurrent instances
+            'misfire_grace_time': 30  # Execute missed jobs if within 30 seconds
+        }
+    )
     
-    # Price check job: runs every minute, uses PA-API or scraping based on configuration
+    # Price check job for VIP users: runs every minute
     scheduler.add_job(
-        check_prices_job,
+        check_prices_job_vip,
         'interval',
         minutes=1,
         args=[bot],
-        id='price_check',
+        id='price_check_vip',
+        replace_existing=True
+    )
+    
+    # Price check job for regular users: runs every 15 minutes
+    scheduler.add_job(
+        check_prices_job_regular,
+        'interval',
+        minutes=15,
+        args=[bot],
+        id='price_check_regular',
         replace_existing=True
     )
     method = "PA-API" if settings.ENABLE_PA_API else "Web Scraping"
-    logger.info(f"Price check job scheduled to run every 1 minute using {method}")
+    logger.info(f"Price check jobs scheduled: VIP (every 1 min) and Regular (every 15 min) using {method}")
     
-    # Daily summary job: optional, runs at configured time
-    summary_hour = settings.DAILY_SUMMARY_HOUR
-    summary_minute = settings.DAILY_SUMMARY_MINUTE
+    # Summary job: runs every 1 day
     scheduler.add_job(
         daily_summary_job,
-        'cron',
-        hour=summary_hour,
-        minute=summary_minute,
+        'interval',
+        days=1,
         args=[bot],
         id='daily_summary',
         replace_existing=True
     )
-    logger.info(f"Daily summary job scheduled to run at {summary_hour:02d}:{summary_minute:02d}")
+    logger.info("Summary job scheduled to run every 1 day")
     
     # Start scheduler
     scheduler.start()
