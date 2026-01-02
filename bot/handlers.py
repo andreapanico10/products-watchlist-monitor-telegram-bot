@@ -1,10 +1,10 @@
-"""Telegram bot handlers."""
+import logging
 from telegram import Update
 from telegram.ext import ContextTypes, MessageHandler, CommandHandler, CallbackQueryHandler, filters
 from sqlalchemy.orm import Session
 from database.database import get_db
 from database.models import User, Product, UserProduct, PriceHistory
-from amazon.parser import extract_asin_from_url
+from amazon.parser import extract_asin_from_url, extract_asin_with_expansion
 from amazon.api_client import AmazonAPIClient
 from amazon.scraper import AmazonScraper
 from amazon.affiliate import generate_affiliate_link, generate_base_affiliate_link
@@ -22,8 +22,10 @@ from bot.messages import (
 from bot.keyboards import create_watchlist_keyboard, create_remove_confirmation_keyboard
 from config.settings import settings
 
+logger = logging.getLogger(__name__)
 
-def get_or_create_user(db: Session, telegram_user, referrer_id: int = None) -> User:
+
+def get_or_create_user(db: Session, telegram_user, referrer_id: int = None) -> tuple:
     """
     Get or create user from Telegram user object, updating all available information.
     
@@ -33,7 +35,7 @@ def get_or_create_user(db: Session, telegram_user, referrer_id: int = None) -> U
         referrer_id: Optional referrer telegram_id if user came from referral link
         
     Returns:
-        User database object
+        Tuple of (User database object, is_new_user: bool)
     """
     db_user = db.query(User).filter(User.telegram_id == telegram_user.id).first()
     is_new_user = False
@@ -69,15 +71,11 @@ def get_or_create_user(db: Session, telegram_user, referrer_id: int = None) -> U
         db_user.is_bot = getattr(telegram_user, 'is_bot', False)
         db_user.is_premium = getattr(telegram_user, 'is_premium', None)
         
-        # Set referrer only if not already set (first time registration via referral)
-        if referrer_id and not db_user.referrer_id:
-            db_user.referrer_id = referrer_id
-            db.commit()
-            # process_referral will be called after with bot access
-        else:
-            db.commit()
+        # Do NOT set referrer for existing users - they already exist
+        # Referral counts only for NEW users
+        db.commit()
     
-    return db_user
+    return db_user, is_new_user
 
 
 async def process_referral(db: Session, referrer_id: int, bot=None):
@@ -142,7 +140,7 @@ Qualcuno si è iscritto usando il tuo codice referral!
             )
         except Exception as e:
             # Log error but don't fail the referral processing
-            print(f"Error sending referral notification to {referrer_id}: {e}")
+            logger.error(f"Error sending referral notification to {referrer_id}: {e}")
 
 
 def get_user_referral_stats(db: Session, user_id: int) -> dict:
@@ -192,13 +190,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     referrer_id = None
         
         # Create or get user (with referral if provided)
-        db_user = get_or_create_user(db, user, referrer_id=referrer_id)
+        db_user, is_new_user = get_or_create_user(db, user, referrer_id=referrer_id)
         
-        # Process referral if user came via referral link (with bot for notification)
-        # This happens when:
-        # 1. New user registered with referral link
-        # 2. Existing user registered with referral link for the first time
-        if referrer_id and db_user.referrer_id == referrer_id:
+        # Process referral ONLY if this is a NEW user with a referrer
+        # This prevents double counting if user restarts the bot
+        if is_new_user and referrer_id and db_user.referrer_id == referrer_id:
             bot = context.bot
             await process_referral(db, referrer_id, bot=bot)
             # Refresh user to get updated referral info
@@ -217,9 +213,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
     except Exception as e:
-        print(f"Error in start_command: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error in start_command: {e}", exc_info=True)
         await update.message.reply_text(get_error_message())
     finally:
         db.close()
@@ -232,7 +226,7 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # Get or create user (update user info if needed)
-        db_user = get_or_create_user(db, user)
+        db_user, _ = get_or_create_user(db, user)
         
         user_products = db.query(UserProduct).filter(UserProduct.user_id == user.id).all()
         
@@ -275,7 +269,7 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(message, parse_mode='Markdown', reply_markup=keyboard)
     except Exception as e:
-        print(f"Error in watchlist_command: {e}")
+        logger.error(f"Error in watchlist_command: {e}")
         await update.message.reply_text(get_error_message())
     finally:
         db.close()
@@ -294,7 +288,7 @@ async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asin = context.args[0].upper()
         
         # Find user product (update user info if needed)
-        db_user = get_or_create_user(db, user)
+        db_user, _ = get_or_create_user(db, user)
         
         product = db.query(Product).filter(Product.asin == asin).first()
         if not product:
@@ -316,7 +310,7 @@ async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(get_product_removed_message(asin), parse_mode='Markdown')
     except Exception as e:
-        print(f"Error in remove_command: {e}")
+        logger.error(f"Error in remove_command: {e}")
         await update.message.reply_text(get_error_message())
     finally:
         db.close()
@@ -329,9 +323,10 @@ async def handle_amazon_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
     db = next(get_db())
     
     try:
-        # Extract ASIN from URL
-        asin = extract_asin_from_url(message_text)
+        # Extract ASIN from URL (with expansion for shortened URLs)
+        asin = await extract_asin_with_expansion(message_text)
         if not asin:
+            logger.warning(f"ASIN could not be extracted from message: {message_text[:100]}...")
             await update.message.reply_text(get_product_not_found_message())
             return
         
@@ -363,7 +358,7 @@ async def handle_amazon_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     # Use URL from API if available, otherwise use generated one
                     product_url = product_info.get('url', product_url)
             except Exception as e:
-                print(f"Error getting product info from PA-API: {e}")
+                logger.error(f"Error getting product info from PA-API: {e}")
                 # Fallback to scraping
                 try:
                     scraper = AmazonScraper()
@@ -376,7 +371,7 @@ async def handle_amazon_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     else:
                         product_title = f"Prodotto {asin}"
                 except Exception as scrape_error:
-                    print(f"Error getting product info from scraping: {scrape_error}")
+                    logger.error(f"Error getting product info from scraping: {scrape_error}")
                     product_title = f"Prodotto {asin}"
         else:
             # PA-API not enabled: use web scraping
@@ -392,7 +387,7 @@ async def handle_amazon_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 else:
                     product_title = f"Prodotto {asin}"
             except Exception as e:
-                print(f"Error getting product info from scraping: {e}")
+                logger.error(f"Error getting product info from scraping: {e}")
                 product_title = f"Prodotto {asin}"
         
         # Create or update product
@@ -419,7 +414,7 @@ async def handle_amazon_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
             db.refresh(product)
         
         # Check if user already has this product (create/update user info)
-        db_user = get_or_create_user(db, user)
+        db_user, _ = get_or_create_user(db, user)
         
         user_product = db.query(UserProduct).filter(
             UserProduct.user_id == user.id,
@@ -503,9 +498,7 @@ async def handle_amazon_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(message, parse_mode='Markdown')
         
     except Exception as e:
-        print(f"Error in handle_amazon_link: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error in handle_amazon_link: {e}", exc_info=True)
         await update.message.reply_text(get_error_message())
     finally:
         db.close()
@@ -536,7 +529,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             asin = data.replace("confirm_remove_", "")
             
             # Find and remove user product (update user info if needed)
-            db_user = get_or_create_user(db, user)
+            db_user, _ = get_or_create_user(db, user)
             if db_user:
                 product = db.query(Product).filter(Product.asin == asin).first()
                 if product:
@@ -560,7 +553,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text("❌ Rimozione annullata.")
         
     except Exception as e:
-        print(f"Error in handle_callback_query: {e}")
+        logger.error(f"Error in handle_callback_query: {e}")
         await query.edit_message_text(get_error_message())
     finally:
         db.close()
@@ -573,7 +566,7 @@ async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # Get or create user
-        db_user = get_or_create_user(db, user)
+        db_user, _ = get_or_create_user(db, user)
         
         # Get referral stats
         stats = get_user_referral_stats(db, user.id)
@@ -612,9 +605,7 @@ async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(message, parse_mode='Markdown')
         
     except Exception as e:
-        print(f"Error in referral_command: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error in referral_command: {e}", exc_info=True)
         await update.message.reply_text(get_error_message())
     finally:
         db.close()
@@ -625,7 +616,7 @@ async def canale_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text(get_channel_info_message(), parse_mode='Markdown')
     except Exception as e:
-        print(f"Error in canale_command: {e}")
+        logger.error(f"Error in canale_command: {e}")
         await update.message.reply_text(get_error_message())
 
 

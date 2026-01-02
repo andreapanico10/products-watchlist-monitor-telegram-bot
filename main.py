@@ -15,15 +15,19 @@ nest_asyncio.apply()
 # Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    force=True  # Force override any existing configuration
 )
 
-# Suppress noisy HTTP loggers
+# Suppress noisy HTTP loggers but keep WARNINGs
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
 logging.getLogger('telegram').setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+# Fallback print to ensure user sees something even if logging is misconfigured
+print("[-] Logging system initialized at level INFO. If you don't see logs below, check your terminal output settings.")
 
 
 async def main():
