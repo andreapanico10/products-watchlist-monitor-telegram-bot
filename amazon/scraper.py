@@ -1,11 +1,11 @@
-"""Web scraper for Amazon product pages to extract prices."""
-import re
+import logging
+import random
 import time
+import re
 import requests
 from bs4 import BeautifulSoup
 from typing import Optional, Dict
 from config.settings import settings
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -16,12 +16,19 @@ class AmazonScraper:
     def __init__(self):
         self.region = settings.AMAZON_REGION
         self.last_request_time = 0
-        self.min_request_interval = 0.5  # Reduced from 2.0 to 0.5 as requested
+        self.min_request_interval = 0.5
         
-        # Initialize session for connection pooling and cookie persistence
+        # List of realistic User-Agents to rotate
+        self.user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/121.0',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0'
+        ]
+        
         self.session = requests.Session()
-        
-        # Map region to domain
         self.domain_map = {
             'IT': 'amazon.it',
             'US': 'amazon.com',
@@ -33,32 +40,62 @@ class AmazonScraper:
             'JP': 'amazon.co.jp',
             'AU': 'amazon.com.au',
         }
-        
         self.domain = self.domain_map.get(self.region.upper(), 'amazon.it')
-        # Set session-wide headers
-        self.session.headers.update(self._get_headers())
+        self._warmup_session()
     
     def _rate_limit(self):
-        """Enforce rate limiting to avoid being blocked."""
+        """Enforce rate limiting with slight random jitter."""
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
         
-        if time_since_last < self.min_request_interval:
-            sleep_time = self.min_request_interval - time_since_last
+        # Add a 20-50% random jitter to the wait time to look less like a bot
+        jitter = random.uniform(1.0, 1.5)
+        required_wait = self.min_request_interval * jitter
+        
+        if time_since_last < required_wait:
+            sleep_time = required_wait - time_since_last
             time.sleep(sleep_time)
         
         self.last_request_time = time.time()
     
-    def _get_headers(self) -> Dict[str, str]:
-        """Get HTTP headers that mimic a real browser."""
-        return {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    def _warmup_session(self):
+        """Initial call to get basic cookies from Amazon."""
+        try:
+            logger.info(f"Warming up scraper session on {self.domain}...")
+            self.session.headers.update(self._get_headers())
+            self.session.get(f"https://www.{self.domain}/", timeout=10)
+        except Exception as e:
+            logger.warning(f"Session warmup failed: {e}")
+    
+    def _get_headers(self, with_referer=True) -> Dict[str, str]:
+        """Get HTTP headers that mimic a real browser with rotation."""
+        headers = {
+            'User-Agent': random.choice(self.user_agents),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
             'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
+            'Cache-Control': 'max-age=0',
+            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
         }
+        
+        if with_referer:
+            referers = [
+                'https://www.google.com/',
+                'https://www.bing.com/',
+                f'https://www.{self.domain}/',
+                'https://www.facebook.com/'
+            ]
+            headers['Referer'] = random.choice(referers)
+            
+        return headers
     
     def _extract_price_from_text(self, price_text: str) -> Optional[float]:
         """
@@ -140,6 +177,11 @@ class AmazonScraper:
         url = f"https://www.{self.domain}/dp/{asin}"
         
         try:
+            # Rotate headers for each request
+            headers = self._get_headers()
+            self.session.headers.update(headers)
+            logger.info(f"[{asin}] Using User-Agent: {headers['User-Agent'][:50]}...")
+            
             # Reusing the existing session for better performance and cookie handling
             response = self.session.get(url, timeout=15)
             logger.info(f"[{asin}] Scraper request status: {response.status_code}")
@@ -190,89 +232,72 @@ class AmazonScraper:
         return ''
     
     def _extract_price(self, soup: BeautifulSoup) -> Optional[float]:
-        """Extract price from page using multiple strategies."""
-        # Strategy 1: New Amazon format with separate whole and fraction parts
-        price_whole_elem = soup.select_one('.a-price-whole')
-        price_fraction_elem = soup.select_one('.a-price-fraction')
-        if price_whole_elem and price_fraction_elem:
-            whole_text = price_whole_elem.get_text(strip=True).replace('.', '').replace(',', '')
-            fraction_text = price_fraction_elem.get_text(strip=True)
-            try:
-                price = float(f"{whole_text}.{fraction_text}")
-                logger.info(f"Price found using Strategy 1: {price}")
-                return price
-            except ValueError:
-                logger.debug("Strategy 1 failed to convert price to float")
-                pass
-        else:
-            logger.debug("Strategy 1 elements not found (.a-price-whole/fraction)")
+        """Extract price from page using targeted selectors to avoid sponsored products."""
         
-        # Strategy 2: Try various price selectors (Amazon has different layouts)
-        price_selectors = [
-            '#priceblock_ourprice',  # Main price
-            '#priceblock_dealprice',  # Deal price
-            '#priceblock_saleprice',  # Sale price
-            '.a-price .a-offscreen',  # Hidden price (accessible)
-            'span.a-price[data-a-color="base"] span.a-offscreen',  # Base price
-            'span.a-price[data-a-color="price"] span.a-offscreen',  # Price color
-            '.a-price-range .a-price-whole',  # Price range
-            '#twister-plus-price-data-price',  # Price data attribute
+        # 1. Define main price containers (ordered by reliability)
+        main_price_containers = [
+            '#corePrice_desktop',
+            '#corePrice_feature_div',
+            '#corePriceDisplay_desktop_feature_div',
+            '#apex_desktop',
+            '#price_inside_buybox',
+            '#newBuyBoxPrice',
+            '#priceblock_ourprice',
+            '#priceblock_dealprice'
         ]
         
-        for selector in price_selectors:
-            price_elem = soup.select_one(selector)
-            if price_elem:
-                price_text = price_elem.get_text(strip=True)
-                if not price_text:
-                    # Try data attribute
-                    price_text = price_elem.get('data-a-price', '')
+        # 2. Try to find the price ONLY inside these main containers
+        for container_selector in main_price_containers:
+            container = soup.select_one(container_selector)
+            if not container:
+                continue
                 
+            # Strategy: Look for the 'offscreen' price first (usually the most reliable clean text)
+            offscreen = container.select_one('.a-offscreen')
+            if offscreen:
+                price_text = offscreen.get_text(strip=True)
                 price = self._extract_price_from_text(price_text)
                 if price:
-                    logger.info(f"Price found using Strategy 2 (selector {selector}): {price}")
+                    logger.info(f"Price found in {container_selector} (.a-offscreen): {price}")
                     return price
+            
+            # Strategy: Look for the whole/fraction components within the main container
+            price_whole = container.select_one('.a-price-whole')
+            price_fraction = container.select_one('.a-price-fraction')
+            if price_whole and price_fraction:
+                whole_text = price_whole.get_text(strip=True).replace('.', '').replace(',', '')
+                fraction_text = price_fraction.get_text(strip=True)
+                try:
+                    price = float(f"{whole_text}.{fraction_text}")
+                    logger.info(f"Price found in {container_selector} (whole/fraction): {price}")
+                    return price
+                except ValueError:
+                    pass
         
-        logger.debug("Strategy 2 failed: No price selectors matched")
-        
-        # Strategy 2: Try to find price in JSON-LD structured data
-        json_ld_scripts = soup.find_all('script', type='application/ld+json')
-        for script in json_ld_scripts:
-            try:
-                import json
-                data = json.loads(script.string)
-                if isinstance(data, dict):
-                    offers = data.get('offers', {})
-                    if isinstance(offers, dict):
-                        price = offers.get('price')
-                        if price:
-                            try:
-                                return float(price)
-                            except (ValueError, TypeError):
-                                pass
-            except (json.JSONDecodeError, AttributeError) as e:
-                logger.debug(f"JSON-LD parsing error: {e}")
+        # 3. Fallback: If no price in main containers, search for any a-price that is NOT in a carousel/sponsored block
+        # This is a bit risky but can catch unusual layouts
+        all_prices = soup.select('.a-price .a-offscreen')
+        for p in all_prices:
+            # Check if this price is inside a suspicious container
+            parent_text = ""
+            current = p
+            for _ in range(10): # Look up 10 levels
+                if not current.parent: break
+                current = current.parent
+                if current.get('id'): parent_text += " " + current.get('id')
+                if current.get('class'): parent_text += " " + " ".join(current.get('class'))
+            
+            # Skip if inside common 'other products' blocks
+            bad_keywords = ['sponsored', 'carousel', 'similar', 'related', 'bundle', 'upsell', 'accessory']
+            if any(k in parent_text.lower() for k in bad_keywords):
                 continue
-        
-        logger.debug("Strategy 3 (JSON-LD) failed")
-        
-        # Strategy 4: Search for price pattern in page text
-        price_patterns = [
-            r'€\s*(\d+[.,]\d{2})',
-            r'(\d+[.,]\d{2})\s*€',
-            r'\$\s*(\d+[.,]\d{2})',
-            r'(\d+[.,]\d{2})\s*USD',
-        ]
-        
-        page_text = soup.get_text()
-        for pattern in price_patterns:
-            match = re.search(pattern, page_text)
-            if match:
-                price = self._extract_price_from_text(match.group(0))
-                if price:
-                    logger.info(f"Price found using Strategy 4 (regex): {price}")
-                    return price
-        
-        logger.debug("Strategy 4 (Regex) failed")
+                
+            price = self._extract_price_from_text(p.get_text(strip=True))
+            if price:
+                logger.info(f"Price found via fallback (safe filtered): {price}")
+                return price
+
+        logger.debug("No valid price found after targeted and filtered search")
         return None
     
     def _extract_availability(self, soup: BeautifulSoup) -> str:

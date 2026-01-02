@@ -64,6 +64,9 @@ async def check_single_product(bot: Bot, product: Product, price_fetcher, method
         # Update price to history (update existing or create if first time)
         from sqlalchemy.sql import func
         if previous_price_record:
+            if previous_price_record.price != current_price:
+                logger.info(f"[{product.asin}] Price variation detected: {previous_price_record.price} -> {current_price}")
+            
             previous_price_record.price = current_price
             previous_price_record.currency = currency
             previous_price_record.checked_at = func.now()
@@ -93,15 +96,10 @@ async def check_single_product(bot: Bot, product: Product, price_fetcher, method
         
         if previous_price:
             if current_price < previous_price:
-                logger.info(f"[{product.asin}] Price dropped: {previous_price} → {current_price}")
-                # It dropped since last check
-                if (product.target_price and current_price < product.target_price) or \
-                   (product.initial_price and current_price < product.initial_price):
-                    price_dropped = True
-                    comparison_price = previous_price
-                    logger.info(f"[{product.asin}] ✅ PRICE DROP DETECTED! Will notify users.")
-                else:
-                    logger.info(f"[{product.asin}] ❌ Price dropped but not below target/initial. No notification.")
+                # DETECTED DROP relative to last check
+                logger.info(f"[{product.asin}] Price dropped: {previous_price} → {current_price} ✅")
+                price_dropped = True
+                comparison_price = previous_price
             else:
                 logger.debug(f"[{product.asin}] Price stable or increased: {previous_price} → {current_price}")
         else:
