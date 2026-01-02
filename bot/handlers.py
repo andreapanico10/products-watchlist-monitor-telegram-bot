@@ -468,14 +468,24 @@ async def handle_amazon_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         db.add(user_product)
         
-        # Save initial price to history if available
+        # Update price to history (update existing or create if first time)
         if product_price:
-            price_history = PriceHistory(
-                product_id=product.id,
-                price=product_price,
-                currency=currency
-            )
-            db.add(price_history)
+            from sqlalchemy.sql import func
+            price_history = db.query(PriceHistory).filter(
+                PriceHistory.product_id == product.id
+            ).first()
+            
+            if price_history:
+                price_history.price = product_price
+                price_history.currency = currency
+                price_history.checked_at = func.now()
+            else:
+                price_history = PriceHistory(
+                    product_id=product.id,
+                    price=product_price,
+                    currency=currency
+                )
+                db.add(price_history)
         
         db.commit()
         

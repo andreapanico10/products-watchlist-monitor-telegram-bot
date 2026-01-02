@@ -16,7 +16,10 @@ class AmazonScraper:
     def __init__(self):
         self.region = settings.AMAZON_REGION
         self.last_request_time = 0
-        self.min_request_interval = 2.0  # Be respectful: 2 seconds between requests
+        self.min_request_interval = 0.5  # Reduced from 2.0 to 0.5 as requested
+        
+        # Initialize session for connection pooling and cookie persistence
+        self.session = requests.Session()
         
         # Map region to domain
         self.domain_map = {
@@ -32,6 +35,8 @@ class AmazonScraper:
         }
         
         self.domain = self.domain_map.get(self.region.upper(), 'amazon.it')
+        # Set session-wide headers
+        self.session.headers.update(self._get_headers())
     
     def _rate_limit(self):
         """Enforce rate limiting to avoid being blocked."""
@@ -135,9 +140,16 @@ class AmazonScraper:
         url = f"https://www.{self.domain}/dp/{asin}"
         
         try:
-            response = requests.get(url, headers=self._get_headers(), timeout=15)
+            # Reusing the existing session for better performance and cookie handling
+            response = self.session.get(url, timeout=15)
+            logger.info(f"[{asin}] Scraper request status: {response.status_code}")
             response.raise_for_status()
             
+            # Check for CAPTCHA or Robot Check
+            if "api-services-support@amazon.com" in response.text or "robot checkpoint" in response.text.lower():
+                logger.error(f"[{asin}] Amazon Robot Check/CAPTCHA detected!")
+                return None
+
             soup = BeautifulSoup(response.content, 'lxml')
             
             product_info = {
@@ -186,9 +198,14 @@ class AmazonScraper:
             whole_text = price_whole_elem.get_text(strip=True).replace('.', '').replace(',', '')
             fraction_text = price_fraction_elem.get_text(strip=True)
             try:
-                return float(f"{whole_text}.{fraction_text}")
+                price = float(f"{whole_text}.{fraction_text}")
+                logger.info(f"Price found using Strategy 1: {price}")
+                return price
             except ValueError:
+                logger.debug("Strategy 1 failed to convert price to float")
                 pass
+        else:
+            logger.debug("Strategy 1 elements not found (.a-price-whole/fraction)")
         
         # Strategy 2: Try various price selectors (Amazon has different layouts)
         price_selectors = [
@@ -212,7 +229,10 @@ class AmazonScraper:
                 
                 price = self._extract_price_from_text(price_text)
                 if price:
+                    logger.info(f"Price found using Strategy 2 (selector {selector}): {price}")
                     return price
+        
+        logger.debug("Strategy 2 failed: No price selectors matched")
         
         # Strategy 2: Try to find price in JSON-LD structured data
         json_ld_scripts = soup.find_all('script', type='application/ld+json')
@@ -229,10 +249,13 @@ class AmazonScraper:
                                 return float(price)
                             except (ValueError, TypeError):
                                 pass
-            except (json.JSONDecodeError, AttributeError):
+            except (json.JSONDecodeError, AttributeError) as e:
+                logger.debug(f"JSON-LD parsing error: {e}")
                 continue
         
-        # Strategy 3: Search for price pattern in page text
+        logger.debug("Strategy 3 (JSON-LD) failed")
+        
+        # Strategy 4: Search for price pattern in page text
         price_patterns = [
             r'€\s*(\d+[.,]\d{2})',
             r'(\d+[.,]\d{2})\s*€',
@@ -246,8 +269,10 @@ class AmazonScraper:
             if match:
                 price = self._extract_price_from_text(match.group(0))
                 if price:
+                    logger.info(f"Price found using Strategy 4 (regex): {price}")
                     return price
         
+        logger.debug("Strategy 4 (Regex) failed")
         return None
     
     def _extract_availability(self, soup: BeautifulSoup) -> str:

@@ -33,8 +33,12 @@ async def check_single_product(bot: Bot, product: Product, price_fetcher, method
         # Get current price using selected method
         product_info = price_fetcher.get_product_info(product.asin)
         
-        if not product_info or product_info.get('price') is None:
-            logger.warning(f"Could not get price for product {product.asin} using {method}")
+        if not product_info:
+            logger.warning(f"[{product.asin}] Could not get product info using {method}. Page might be blocked or ASIN is invalid.")
+            return
+            
+        if product_info.get('price') is None:
+            logger.warning(f"[{product.asin}] Product info retrieved but price is missing using {method}.")
             return
         
         current_price = product_info['price']
@@ -57,14 +61,23 @@ async def check_single_product(bot: Bot, product: Product, price_fetcher, method
         
         logger.info(f"[{product.asin}] Price check: previous={previous_price}, current={current_price}, initial={product.initial_price}, target={product.target_price}")
         
-        # Save price to history (always update price_history)
-        price_history = PriceHistory(
-            product_id=product.id,
-            price=current_price,
-            currency=currency
-        )
-        db.add(price_history)
+        # Update price to history (update existing or create if first time)
+        from sqlalchemy.sql import func
+        if previous_price_record:
+            previous_price_record.price = current_price
+            previous_price_record.currency = currency
+            previous_price_record.checked_at = func.now()
+            logger.debug(f"[{product.asin}] Updated existing price history record")
+        else:
+            price_history = PriceHistory(
+                product_id=product.id,
+                price=current_price,
+                currency=currency
+            )
+            db.add(price_history)
+            logger.info(f"[{product.asin}] Created first price history record")
         
+        db.commit() # Commit changes to ensure previous_price_record is updated        
         # Update initial_price if not set
         if not product.initial_price:
             product.initial_price = current_price
